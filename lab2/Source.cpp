@@ -7,18 +7,32 @@
 
 using namespace std;
 
-#define l_VAL 4
+#define l_VAL 8
 #define m_VAL 8
-#define n_VAL 16
+#define n_VAL 8
 
+int block_n;
+int block_m;
+int block_l;
 
+struct Interval
+{
+	int start;
+	int end;
+};
+
+struct CustomSize
+{
+	Interval width;
+	Interval height;
+};
 
 class Matrix;
 
 class SmallMatrix
 {
 	friend class Matrix;
-protected:
+public:
 	double** data;
 	int row;
 	int column;
@@ -84,7 +98,7 @@ public:
 class Matrix
 {
 	friend class SmallMatrix;
-protected:
+public:
 	SmallMatrix*** matrix;
 	int row_matrix;
 	int column_matrix;
@@ -217,6 +231,22 @@ void MulMatricesWithIntrin(SmallMatrix& A, SmallMatrix& B, SmallMatrix& resultC)
 	}
 }
 
+void SumMatricesWithIntrin(SmallMatrix& summand, SmallMatrix& result)
+{
+	for (int l = 0; l < l_VAL; l++)
+	{
+		for (int n = 0; n < n_VAL; n += 4)
+		{
+			__m256d c = _mm256_load_pd(&result.data[l][n]);
+			__m256d a = _mm256_load_pd(&(summand.data[l][n]));//
+			c = _mm256_add_pd(a, c);
+
+			_mm256_store_pd(&result.data[l][n], c);
+		}
+	}
+
+}
+
 void SumArrayOfMatricesWithIntrin(SmallMatrix** arrayOfSummands, long numberOfSummands, SmallMatrix& result)
 {
 	for (int l = 0; l < l_VAL; l++)
@@ -259,6 +289,20 @@ void MulMatrices(SmallMatrix& A, SmallMatrix& B, SmallMatrix& resultC)
 	}
 
 }
+
+void SumMatrices(SmallMatrix& summand, SmallMatrix& result)
+{
+	for (int l = 0; l < l_VAL; l++)
+	{
+		double** dataPointer = summand.data;
+		//#pragma loop(no_vector)
+		for (int n = 0; n < n_VAL; n++)
+		{
+			result.data[l][n] += dataPointer[l][n];
+		}
+	}
+}
+
 void SumArrayOfMatrices(SmallMatrix** arrayOfSummands, long numberOfSummands, SmallMatrix& result)
 {
 	for (int l = 0; l < l_VAL; l++)
@@ -275,6 +319,38 @@ void SumArrayOfMatrices(SmallMatrix** arrayOfSummands, long numberOfSummands, Sm
 			for (int n = 0; n < n_VAL; n++)
 			{
 				result.data[l][n] += dataPointer[l][n];
+			}
+		}
+	}
+}
+
+void MulCustomMatrix(Matrix& A, Matrix& B, Matrix& C, Interval lSize, Interval nSize, Interval mSize)
+{
+	SmallMatrix* bufferMatrix = new SmallMatrix(l_VAL, n_VAL);
+	for (int l = lSize.start; l <= lSize.end; l++)
+	{
+		for (int n = nSize.start; n <= nSize.end; n++)
+		{
+			for (int m = mSize.start; m <= mSize.end; m++)
+			{
+				MulMatricesWithIntrin(*A.matrix[l][m], *B.matrix[m][n], *bufferMatrix);
+				SumMatricesWithIntrin(*bufferMatrix, *C.matrix[l][n]);
+			}
+		}
+	}
+}
+
+void MulMatrixWithBlocks(Matrix& objA, Matrix& objB, Matrix& objC)
+{
+	for (int l = 0; l < objA.row_matrix; l += block_l)
+	{
+		for (int n = 0; n < objC.column_matrix; n += block_n)
+		{
+			for (int m = 0; m < objB.row_matrix; m += block_m)
+			{
+				Interval l_interv{ l, l + block_l - 1 }, m_interv{ m, m + block_m - 1 }, n_interv{ n, n + block_n - 1 };
+
+				MulCustomMatrix(objA, objB, objC, l_interv, n_interv, m_interv);
 			}
 		}
 	}
@@ -321,14 +397,25 @@ int main()
 	cin >> m;
 	cout << "Введите параметр N для матрицы матриц" << endl;
 	cin >> n;
+
+	cout << "Введите параметр l для блока" << endl;
+	cin >> block_l;
+	cout << "Введите параметр m для блока" << endl;
+	cin >> block_m;
+	cout << "Введите параметр n для блока" << endl;
+	cin >> block_n;
+
 	Matrix objA(l, m, l_VAL, m_VAL);
 	Matrix objB(m, n, m_VAL, n_VAL);
 	Matrix objCManual(l, n, l_VAL, n_VAL);
 	Matrix objCAuto(l, n, l_VAL, n_VAL);
+	Matrix objCCache(l, n, l_VAL, n_VAL);
 	objA.InitMatrix();
 	objB.InitMatrix();
 
-	ULONGLONG startTime, endTime, timeOfExecutionAuto, timeOfExecutionManual;
+	//MulMatrixWithBlocks(objA, objB, objCCache);
+
+	ULONGLONG startTime, endTime, timeOfExecutionAuto, timeOfExecutionManual, timeOfExecutionCacheFriendly;
 	startTime = GetTickCount64();
 
 	//умножение без ручной векторизации
@@ -351,7 +438,18 @@ int main()
 	timeOfExecutionManual = endTime - startTime;
 	cout << "Время работы с использованием ручной векторизации: " << timeOfExecutionManual << endl;
 
-	if (objCAuto == objCManual)
+	startTime = GetTickCount64();
+
+	//умножение с ручной векторизацией
+
+	//MulMatrix(MulMatricesWithIntrin, SumArrayOfMatricesWithIntrin, objA, objB, objCManual);
+	MulMatrixWithBlocks(objA, objB, objCCache);
+
+	endTime = GetTickCount64();
+	timeOfExecutionCacheFriendly = endTime - startTime;
+	cout << "Время работы с при рационализации хранения в кэше: " << timeOfExecutionCacheFriendly << endl;
+
+	if (objCAuto == objCManual && objCAuto == objCCache)
 	{
 		cout << "Матрицы равны " << endl;
 	}
